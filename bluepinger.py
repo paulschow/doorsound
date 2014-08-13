@@ -29,12 +29,14 @@ import sqlite3
 import subprocess
 import re
 import bluetooth
+import pygame
 import multiprocessing
 import RPi.GPIO as GPIO
 
 
 # connect to the database
-conn = sqlite3.connect('macs.db')
+# Allow multiple threads to access the db
+conn = sqlite3.connect('macs.db', check_same_thread=False)
 # the cursor is c
 c = conn.cursor()
 
@@ -44,10 +46,15 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 # Status LED is in pin 15
 GPIO.setup(15, GPIO.OUT)
+# Set pin 14 as GPIO input
+GPIO.setup(14, GPIO.IN)
 
 #log = open('track1.txt', 'w')  # open a text file for logging
 #print log  # print what the log file is
 #log.write('Time,IP,Ping\n')  # write to log
+
+# initalize pygame mixer for audio
+pygame.mixer.init()
 
 # Set up shared status variable
 gstatus = multiprocessing.Value('i', 0)
@@ -56,6 +63,66 @@ c.execute("SELECT * FROM gone")
 rows = c.fetchall()
 countrow = len(rows)  # Counts the number of rows
 print "Number of Rows:", countrow
+
+
+# Function for door detection thread
+def door_callback(channel):
+    print "Event detected"
+    print '\033[1;32m Object Detected \033[00m'
+    time.sleep(0.1)  # Hack to fix not playing until door is closed
+    try:
+        # Play the song
+        timecheck()
+    except sqlite3.OperationalError:
+        # The database is in use
+        print "\033[91m Error Excepted \033[00m"
+        # Try again after a second
+        time.sleep(1)
+        timecheck()
+    #except:
+        # Some other error
+        # Wait 10 seconds then start over
+        #print "Error"
+        #time.sleep(10)
+
+
+# This starts the door thread
+GPIO.add_event_detect(14, GPIO.RISING, callback=door_callback)
+
+
+# Function for playing music
+def playsong():
+    search = 1  # 1 is the last marker
+    query = "SELECT * FROM gone WHERE last=? ORDER BY {0}".format('Last')
+    c.execute(query, (search,))
+    for row in c:
+        #print row
+        print 'Last person was:', row[4]
+        print 'MP3 file is:', row[3]
+        # Remove their last person tag
+        keyid = row[0]
+        c.execute("UPDATE gone SET Last = 0 WHERE key = %d" % keyid)
+        conn.commit()  # commit changes to the db
+
+        pygame.mixer.music.load(row[3])  # load the file for the person
+        pygame.mixer.music.play()  # play the loaded file
+
+        # Check to see if the song is playing and let it play
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(0)
+        print "Sound played! \n"
+
+
+# Function to make sure music isn't being played too late or early
+def timecheck():
+    hour = time.localtime()[3]
+    # Get the current hour
+    # 24 hour format
+    print "Hour is", hour
+    if 8 < hour < 22:
+        playsong()
+    else:
+        print "It's too late"
 
 
 def newping(btaddr):
@@ -87,7 +154,7 @@ def pingtimer(mac):
     print "Connecting..."
     p = multiprocessing.Process(target=newping, name="ping", args=(mac,))
     p.start()
-    p.join(3)  # Timeout after seconds
+    p.join(4)  # Timeout after seconds
     #print result
     if p.is_alive():
         print "Connection Timed Out"
