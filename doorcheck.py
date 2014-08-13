@@ -30,8 +30,8 @@ import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
 # Disable GPIO warnings
 GPIO.setwarnings(False)
-# Set pin 14 as GPIO input with a pull up resistor
-GPIO.setup(14, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+# Set pin 14 as GPIO input
+GPIO.setup(14, GPIO.IN)
 
 # connect to the database
 # gone.db is for wifi
