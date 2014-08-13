@@ -17,3 +17,8 @@
 * Optinally attach LED(s) to pin 15
 * Run bluepinger.py to start the pinging
 * Run doorcheck.py monitor the door
+
+### Is there a wifi version? ###
+
+* Yes
+* [https://github.com/paulschow/wifidoorsound](https://github.com/paulschow/wifidoorsound)
