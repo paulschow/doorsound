@@ -38,7 +38,7 @@ import RPi.GPIO as GPIO
 # Allow multiple threads to access the db
 conn = sqlite3.connect('macs.db', check_same_thread=False)
 # the cursor is c
-c = conn.cursor()
+#c = conn.cursor()
 
 # Use BCM GPIO numbering
 GPIO.setmode(GPIO.BCM)
@@ -59,10 +59,10 @@ pygame.mixer.init()
 # Set up shared status variable
 gstatus = multiprocessing.Value('i', 0)
 
-c.execute("SELECT * FROM gone")
-rows = c.fetchall()
-countrow = len(rows)  # Counts the number of rows
-print "Number of Rows:", countrow
+#c.execute("SELECT * FROM gone")
+#rows = c.fetchall()
+#countrow = len(rows)  # Counts the number of rows
+#print "Number of Rows:", countrow
 
 
 # Function for door detection thread
@@ -86,12 +86,13 @@ def door_callback(channel):
         #time.sleep(10)
 
 
-# This starts the door thread
-GPIO.add_event_detect(14, GPIO.RISING, callback=door_callback)
-
-
 # Function for playing music
 def playsong():
+    c = conn.cursor()
+    c.execute("SELECT * FROM gone")
+    rows = c.fetchall()
+    countrow = len(rows)  # Counts the number of rows
+    print "Number of Rows:", countrow
     search = 1  # 1 is the last marker
     query = "SELECT * FROM gone WHERE last=? ORDER BY {0}".format('Last')
     c.execute(query, (search,))
@@ -103,6 +104,7 @@ def playsong():
         keyid = row[0]
         c.execute("UPDATE gone SET Last = 0 WHERE key = %d" % keyid)
         conn.commit()  # commit changes to the db
+        print "Total number of rows updated :", conn.total_changes
 
         pygame.mixer.music.load(row[3])  # load the file for the person
         pygame.mixer.music.play()  # play the loaded file
@@ -225,7 +227,7 @@ def db_gone(keyid, prestatus):
         # Turn the LED
         print "LED OFF"
         GPIO.output(15, GPIO. LOW)
-        #print "Total number of rows updated :", conn.total_changes
+        print "Total number of rows updated :", conn.total_changes
 
 
 def db_here(keyid, prestatus):
@@ -243,6 +245,7 @@ def db_here(keyid, prestatus):
         print "LED %d ON" % (15)
         GPIO.output(15, GPIO. HIGH)
         conn.commit()  # commit changes to the db
+        print "Total number of rows updated :", conn.total_changes
     else:
         print "They were already here"
         # Turn the LED
@@ -255,8 +258,16 @@ def db_here(keyid, prestatus):
     #print "Total number of rows updated :", conn.total_changes
 
 
+# This starts the door thread
+GPIO.add_event_detect(14, GPIO.RISING, callback=door_callback)
+
 #Main loop
 while True:
+    c = conn.cursor()
+    c.execute("SELECT * FROM gone")
+    rows = c.fetchall()
+    countrow = len(rows)  # Counts the number of rows
+    print "Number of Rows:", countrow
     for row in rows:
         #print "MAC = %s" % row[5]
         #print "Name = %s" % row[4]
