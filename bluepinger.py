@@ -32,7 +32,20 @@ import bluetooth
 import pygame
 import multiprocessing
 import RPi.GPIO as GPIO
+import argparse
 
+# Parse arguements
+parser = argparse.ArgumentParser(description='Play sound when door is opened')
+parser.add_argument("-v", "--verbose", help="Verbose mode",
+action="store_true")
+parser.add_argument("-vv", "--veryverbose", help="Very verbose mode",
+action="store_true")
+args = parser.parse_args()
+if args.verbose:
+    print "Verbose mode"
+if args.veryverbose:
+    args.verbose = True
+    print "Very verbose mode"
 
 # connect to the database
 # Allow multiple threads to access the db
@@ -67,7 +80,6 @@ gstatus = multiprocessing.Value('i', 0)
 
 # Function for door detection thread
 def door_callback(channel):
-    print "Event detected"
     print '\033[1;32m Object Detected \033[00m'
     time.sleep(0.1)  # Hack to fix not playing until door is closed
     try:
@@ -92,7 +104,8 @@ def playsong():
     c.execute("SELECT * FROM gone")
     rows = c.fetchall()
     countrow = len(rows)  # Counts the number of rows
-    print "Number of Rows:", countrow
+    if args.verbose:
+        print "Number of Rows:", countrow
     search = 1  # 1 is the last marker
     query = "SELECT * FROM gone WHERE last=? ORDER BY {0}".format('Last')
     c.execute(query, (search,))
@@ -104,7 +117,8 @@ def playsong():
         keyid = row[0]
         c.execute("UPDATE gone SET Last = 0 WHERE key = %d" % keyid)
         conn.commit()  # commit changes to the db
-        print "Total number of rows updated :", conn.total_changes
+        if args.veryverbose:
+            print "Total number of rows updated :", conn.total_changes
 
         pygame.mixer.music.load(row[3])  # load the file for the person
         pygame.mixer.music.play()  # play the loaded file
@@ -120,7 +134,8 @@ def timecheck():
     hour = time.localtime()[3]
     # Get the current hour
     # 24 hour format
-    print "Hour is", hour
+    if args.verbose:
+        print "Hour is", hour
     if 8 < hour < 22:
         playsong()
     else:
@@ -153,13 +168,15 @@ def pingtimer(mac):
 # This is a pretty awful use of multiprocessing to time the pings
 # But it works pretty well
 # Maybe later I will use pools or something
-    print "Connecting..."
+    if args.verbose:
+        print "Connecting..."
     p = multiprocessing.Process(target=newping, name="ping", args=(mac,))
     p.start()
     p.join(4)  # Timeout after seconds
     #print result
     if p.is_alive():
-        print "Connection Timed Out"
+        if args.verbose:
+            print "Connection Timed Out"
         # Terminate foo
         gstatus.value = 0
         p.terminate()
@@ -225,9 +242,11 @@ def db_gone(keyid, prestatus):
         c.execute("UPDATE gone SET Status = 0 WHERE key = %d" % keyid)
         conn.commit()  # commit changes to the db
         # Turn the LED
-        print "LED OFF"
+        if args.verbose:
+            print "LED OFF"
         GPIO.output(15, GPIO. LOW)
-        print "Total number of rows updated :", conn.total_changes
+        if args.veryverbose:
+            print "Total number of rows updated :", conn.total_changes
 
 
 def db_here(keyid, prestatus):
@@ -242,14 +261,17 @@ def db_here(keyid, prestatus):
         c.execute("UPDATE gone SET Last = 1 WHERE key = %d" % keyid)
         # Turn on LED
         time.sleep(1)  # Hack to keep people from opening the door too fast
-        print "LED %d ON" % (15)
+        if args.verbose:
+            print "LED %d ON" % (15)
         GPIO.output(15, GPIO. HIGH)
         conn.commit()  # commit changes to the db
-        print "Total number of rows updated :", conn.total_changes
+        if args.veryverbose:
+            print "Total number of rows updated :", conn.total_changes
     else:
         print "They were already here"
         # Turn the LED
-        print "LED OFF"
+        if args.verbose:
+            print "LED OFF"
         GPIO.output(15, GPIO. LOW)
 
     #c.execute("SELECT * FROM gone")
@@ -267,7 +289,8 @@ while True:
     c.execute("SELECT * FROM gone")
     rows = c.fetchall()
     countrow = len(rows)  # Counts the number of rows
-    print "Number of Rows:", countrow
+    if args.verbose:
+        print "Number of Rows:", countrow
     for row in rows:
         #print "MAC = %s" % row[5]
         #print "Name = %s" % row[4]
