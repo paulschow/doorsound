@@ -21,46 +21,92 @@
 # This one uses bluetooth instead of wifi
 
 # You have to pair the devices and add them to macs.db
+# or use another db with the -db option
 
 # Note: Requires sqlite3 and python bluez
+# Requires root because of GPIO
+# I usually run this as sudo nohup ./bluepinger.py &
 
 import time
 import sqlite3
-import subprocess
-import re
 import bluetooth
 import pygame
 import multiprocessing
-import RPi.GPIO as GPIO
 import argparse
+
+try:
+    # Try to use GPIO
+    import RPi.GPIO as GPIO
+except RuntimeError:
+    print "Error: You need to run this as root"
+    quit()
 
 # Parse arguements
 parser = argparse.ArgumentParser(description='Play sound when door is opened')
-parser.add_argument("-v", "--verbose", help="Verbose mode",
+
+# Make a mutually exclusive group so conflicting options can't be used
+group = parser.add_mutually_exclusive_group()
+group.add_argument("-v", "--verbose", help="Verbose mode",
 action="store_true")
-parser.add_argument("-vv", "--veryverbose", help="Very verbose mode",
+group.add_argument("-vv", "--veryverbose", help="Very verbose mode",
 action="store_true")
+group.add_argument("-q", "--quiet", help="Quiet mode, only show errors",
+action="store_true")
+
+parser.add_argument("-db", "--database",
+help="Database file. Default is macs.db", default="macs.db")
+
+parser.add_argument("-sp", "--switchpin",
+help="Reed switch pin. Default is 14", type=int, default=14)
+
+parser.add_argument("-lp", "--ledpin",
+help="Led pin. Default is 15", type=int, default=15)
+
+parser.add_argument("-t", "--timeout",
+help="Bluetooth connection timout in seconds. Default is 4", type=int,
+default=4)
+
+parser.add_argument("-st", "--starttime",
+help="Hour of day when sound is allowed. Default is 8", type=int,
+default=8)
+
+parser.add_argument("-et", "--endtime",
+help="Hour of day when sound stops. Default is 22 (10:00 PM)", type=int,
+default=22)
+
 args = parser.parse_args()
 if args.verbose:
     print "Verbose mode"
 if args.veryverbose:
+    # Very verbose mode includes verbose mode
     args.verbose = True
     print "Very verbose mode"
+#if args.quiet:
+    #print "Quiet mode"
+if args.database != "macs.db":
+    print "Database file is:", args.database
+if args.switchpin != 14:
+    print "Input pin is", args.switchpin
+if args.ledpin != 15:
+    print "LED pin is", args.ledpin
+if args.timeout != 4:
+    print "Bluetooth connection timeout is", args.timeout
 
 # connect to the database
 # Allow multiple threads to access the db
-conn = sqlite3.connect('macs.db', check_same_thread=False)
-# the cursor is c
-#c = conn.cursor()
+conn = sqlite3.connect(args.database, check_same_thread=False)
+
 
 # Use BCM GPIO numbering
 GPIO.setmode(GPIO.BCM)
 # Disable GPIO warnings
 GPIO.setwarnings(False)
 # Status LED is in pin 15
-GPIO.setup(15, GPIO.OUT)
+# Or whatever pin is made with -lp option
+GPIO.setup(args.ledpin, GPIO.OUT)
 # Set pin 14 as GPIO input
-GPIO.setup(14, GPIO.IN)
+# Or whatever pin is made with -sp option
+GPIO.setup(args.switchpin, GPIO.IN)
 
 #log = open('track1.txt', 'w')  # open a text file for logging
 #print log  # print what the log file is
@@ -72,22 +118,18 @@ pygame.mixer.init()
 # Set up shared status variable
 gstatus = multiprocessing.Value('i', 0)
 
-#c.execute("SELECT * FROM gone")
-#rows = c.fetchall()
-#countrow = len(rows)  # Counts the number of rows
-#print "Number of Rows:", countrow
-
 
 # Function for door detection thread
 def door_callback(channel):
-    print '\033[1;32m Object Detected \033[00m'
+    if args.quiet is False:
+        print '\033[1;32m Object Detected \033[00m'
     time.sleep(0.1)  # Hack to fix not playing until door is closed
     try:
         # Play the song
         timecheck()
     except sqlite3.OperationalError:
         # The database is in use
-        print "\033[91m Error Excepted \033[00m"
+        print "\033[91m Error Excepted: DB in use \033[00m"
         # Try again after a second
         time.sleep(1)
         timecheck()
@@ -111,8 +153,9 @@ def playsong():
     c.execute(query, (search,))
     for row in c:
         #print row
-        print 'Last person was:', row[4]
-        print 'MP3 file is:', row[3]
+        if args.quiet is False:
+            print 'Last person was:', row[4]
+            print 'MP3 file is:', row[3]
         # Remove their last person tag
         keyid = row[0]
         c.execute("UPDATE gone SET Last = 0 WHERE key = %d" % keyid)
@@ -126,7 +169,8 @@ def playsong():
         # Check to see if the song is playing and let it play
         while pygame.mixer.music.get_busy():
             pygame.time.Clock().tick(0)
-        print "Sound played! \n"
+        if args.quiet is False:
+            print "Sound played! \n"
 
 
 # Function to make sure music isn't being played too late or early
@@ -136,10 +180,11 @@ def timecheck():
     # 24 hour format
     if args.verbose:
         print "Hour is", hour
-    if 8 < hour < 22:
+    if args.starttime < hour < args.endtime:
         playsong()
     else:
-        print "It's too late"
+        if args.quiet is False:
+            print "It's too late"
 
 
 def newping(btaddr):
@@ -167,63 +212,18 @@ def newping(btaddr):
 def pingtimer(mac):
 # This is a pretty awful use of multiprocessing to time the pings
 # But it works pretty well
-# Maybe later I will use pools or something
     if args.verbose:
         print "Connecting..."
     p = multiprocessing.Process(target=newping, name="ping", args=(mac,))
     p.start()
-    p.join(4)  # Timeout after seconds
-    #print result
+    p.join(args.timeout)  # Timeout after seconds
     if p.is_alive():
         if args.verbose:
             print "Connection Timed Out"
-        # Terminate foo
+        # Terminate connection
         gstatus.value = 0
         p.terminate()
         p.join()
-
-
-def l2ping(phonemac):
-# Old Bluetooth ping command
-# Uses l2ping linux command
-# Returns a 0 if mac is gone
-# Returns a 1 if mac is here
-# This takes ~5 seconds per device, there's a better way
-    p = subprocess.Popen(["sudo", "l2ping", "-t 1", "-c 1", phonemac],
-    stdout=subprocess.PIPE)
-    # run the l2ping (bluetooth ping) command for phonemac
-    # with timeout 1 second
-    # and count 1 (a single ping)
-    (ping, err) = p.communicate()
-    return regping(ping)
-
-
-def regping(ping):
-# URL that generated this code:
-# http://txt2re.com
-# Uses regular expressions to look through l2ping result
-# This is pretty awful, but it works
-
-    txt = str(ping)
-
-    re1 = '.*?'     # Non-greedy match on filler
-    re2 = '( 1 received)'     # Command Seperated Values 1
-
-    rg = re.compile(re1 + re2, re.IGNORECASE | re.DOTALL)
-    m = rg.search(txt)
-    if m:
-        csv1 = m.group(1)
-        #print "(" + csv1 + ")" + "\n"
-    try:
-        if csv1 == " 1 received":
-            print "Ping received"
-            return 1
-        else:
-            print "How did you even get this error"
-            return 0
-    except NameError:
-        print "No Ping received"
-        return 0
 
 
 # function for marking someone as gone in the db
@@ -235,8 +235,6 @@ def db_gone(keyid, prestatus):
     else:
         # They where here before
         # Mark them as gone
-        #print "key = %d" % keyid
-        #c.execute("SELECT * FROM gone")
         # Also mark them as not being last
         c.execute("UPDATE gone SET Last = 0 WHERE key = %d" % keyid)
         c.execute("UPDATE gone SET Status = 0 WHERE key = %d" % keyid)
@@ -250,11 +248,10 @@ def db_gone(keyid, prestatus):
 
 
 def db_here(keyid, prestatus):
-    #print "key = %d" % keyid
-    #print "Previous Status is  = %d" % prestatus
     if prestatus == 0:
         # They just showed up!
-        print '\033[1;32m Person Arrived \033[00m'
+        if args.quiet is False:
+            print '\033[1;32m Person Arrived \033[00m'
         # Set everyone else to not last
         c.execute("UPDATE gone SET Last = 0 WHERE key != %d" % keyid)
         # Set them as the last person
@@ -268,8 +265,9 @@ def db_here(keyid, prestatus):
         if args.veryverbose:
             print "Total number of rows updated :", conn.total_changes
     else:
-        print "They were already here"
-        # Turn the LED
+        if args.quiet is False:
+            print "They were already here"
+        # Turn off the LED
         if args.verbose:
             print "LED OFF"
         GPIO.output(15, GPIO. LOW)
@@ -277,7 +275,8 @@ def db_here(keyid, prestatus):
     #c.execute("SELECT * FROM gone")
     c.execute("UPDATE gone SET Status = 1 WHERE key = %d" % keyid)
     conn.commit()  # commit changes to the db
-    #print "Total number of rows updated :", conn.total_changes
+    if args.veryverbose:
+        print "Total number of rows updated :", conn.total_changes
 
 
 # This starts the door thread
@@ -292,22 +291,23 @@ while True:
     if args.verbose:
         print "Number of Rows:", countrow
     for row in rows:
-        #print "MAC = %s" % row[5]
-        #print "Name = %s" % row[4]
-        #status = l2ping(row[5])  # ping the MAC, get status
-        #status = newping(row[5])  # ping the MAC, get status
+        if args.verbose:
+            print "MAC = %s" % row[5]
+            print "Name = %s" % row[4]
         pingtimer(row[5])  # ping the MAC, get status
         if gstatus.value == 1:
             #print "They're here!"
-            print "\033[94m %s is Here \033[00m" % row[4]
+            if args.quiet is False:
+                print "\033[94m %s is Here \033[00m" % row[4]
             # Send the row to db_here
             db_here(row[0], row[2])
-            print " "
-            #print "Total number of rows updated :", conn.total_changes
+            if args.quiet is False:
+                print " "  # Print blank line
         else:
-            #print "Not Here"
+            if args.quiet is False:
+                print "\033[91m %s is Not Here \033[00m" % row[4]
+                print " "  # Print blank line
             # Send the row to db_gone
-            print "\033[91m %s is Not Here \033[00m" % row[4]
-            print " "
             db_gone(row[0], row[2])
-    print "\033[33m Done \033[00m \n"
+    if args.quiet is False:
+        print "\033[33m Done \033[00m \n"
